@@ -1,6 +1,6 @@
 # Janaseva News — Telugu YouTube Short
 
-Main deliverable: `output/vsp_gvmc_news_telugu_short.mp4` — 55 seconds, 1080×1920 (9:16), 24 fps, H.264/AAC, 48 kHz audio. Telugu voice and on-screen copy are preserved. The six-scene story stays on the selected narration and timing.
+Main deliverable: `output/janaseva_news_ap_top5_2026-09-28.mp4` — 55 seconds, 1920×1080 (16:9), 24 fps, H.264/AAC, 48 kHz audio. Telugu voice and on-screen copy are preserved. The six-scene story stays on the selected narration and timing.
 
 ## Visual redesign
 
