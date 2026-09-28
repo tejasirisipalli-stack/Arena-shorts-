@@ -1,7 +1,7 @@
 """Animated virtual newsroom layout; composited by make_video.py.
 The newsroom is AI-generated; the coast is a photograph, not filmed footage.
 """
-from PIL import Image, ImageDraw, ImageFilter, ImageChops, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageChops, ImageFont, ImageOps
 import math, functools
 
 
@@ -13,7 +13,10 @@ def install(ns):
 W,H=720,1280
 CYAN='#74f4ff'; GOLD='#ffe285'; WHITE='#f2f8ff'; RED='#ff334b'
 studio=Image.open('assets/newsroom.jpg').convert('RGB').resize((W,H),Image.Resampling.LANCZOS)
-coast=Image.open('image-search/visakhapatnam-beach-aerial-city-1.jpg').convert('RGB')
+SCENE_IMAGES=[Image.open(f'assets/realistic/scene{i}.jpg').convert('RGB') for i in range(1,7)]
+PHOTO_BOX=(38,452,270,466)
+PANEL_BOX=(324,452,683,918)
+PANEL_CENTER=(PANEL_BOX[0]+PANEL_BOX[2])//2
 
 @functools.lru_cache(maxsize=140)
 def extrude(s,size,gold=False):
@@ -70,62 +73,159 @@ def slab(im,x,y,w,h,depth=15,color='#123e5c'):
     d.polygon([(x,y),(x+depth,y-depth),(x+w+depth,y-depth),(x+w,y)],fill='#296580',outline=CYAN)
     d.rectangle((x,y,x+w,y+h),fill=color,outline='#599db4',width=2)
 
-def scene(im,idx,t):
+def center_text(im,s,y,size=24,color=WHITE,max_width=320):
+    layer=textimg(s,size,color)
+    if layer.width>max_width:
+        layer=layer.resize((max_width,max(1,round(layer.height*max_width/layer.width))),Image.Resampling.LANCZOS)
+    im.alpha_composite(layer,(PANEL_CENTER-layer.width//2,int(y)))
+
+def local_title(im,s,y,t,delay=0,gold=False,size=50):
+    p=max(0,min(1,(t-delay)/.55));ease=1-(1-p)**3
+    layer=extrude(s,size,gold)
+    max_width=PANEL_BOX[2]-PANEL_BOX[0]-38
+    if layer.width>max_width:
+        layer=layer.resize((max_width,max(1,round(layer.height*max_width/layer.width))),Image.Resampling.LANCZOS)
+    scale=.78+.22*ease
+    layer=layer.resize((max(1,int(layer.width*scale)),max(1,int(layer.height*scale))),Image.Resampling.BICUBIC)
+    if p<1:layer.putalpha(layer.getchannel('A').point(lambda a:int(a*p)))
+    im.alpha_composite(layer,(PANEL_CENTER-layer.width//2,int(y+17*(1-ease))))
+
+def photo_window(im,idx,t):
+    x,y,w,h=PHOTO_BOX
+    progress=max(0,min(1,t/DURS[idx]))
+    zoom=1.018+.042*progress
+    fx=max(0,min(1,.5+.018*math.sin(t*.36+idx*.8)))
+    fy=max(0,min(1,.5+.026*math.sin(t*.28+idx*.6)))
+    ow,oh=round(w*zoom),round(h*zoom)
+    still=ImageOps.fit(SCENE_IMAGES[idx],(ow,oh),method=Image.Resampling.LANCZOS,centering=(fx,fy))
+    still=still.crop(((ow-w)//2,(oh-h)//2,(ow-w)//2+w,(oh-h)//2+h)).convert('RGBA')
+    shade=Image.new('RGBA',(w,h));sd=ImageDraw.Draw(shade)
+    for j in range(80):
+        a=int(205*(j/79)**1.7)
+        sd.line((0,h-80+j,w,h-80+j),fill=(1,10,22,a),width=1)
+    still=Image.alpha_composite(still,shade)
+    mask=Image.new('L',(w,h));ImageDraw.Draw(mask).rounded_rectangle((0,0,w-1,h-1),radius=17,fill=255)
+    still.putalpha(mask)
+    glow=Image.new('RGBA',(W,H));gd=ImageDraw.Draw(glow)
+    gd.rounded_rectangle((x-2,y-2,x+w+2,y+h+2),radius=20,fill=(65,220,255,100))
+    im.alpha_composite(glow.filter(ImageFilter.GaussianBlur(14)))
+    im.alpha_composite(still,(x,y))
     d=ImageDraw.Draw(im)
-    bob=math.sin(t*1.3)*5
+    d.rounded_rectangle((x,y,x+w,y+h),radius=17,outline='#8af5ff',width=2)
+    # Restrained broadcast focus brackets and a moving specular glint keep the still image lively.
+    for sx,sy,dx,dy in ((x+9,y+9,1,1),(x+w-9,y+9,-1,1),(x+9,y+h-9,1,-1),(x+w-9,y+h-9,-1,-1)):
+        d.line((sx,sy,sx+dx*22,sy),fill='#e6324a',width=3)
+        d.line((sx,sy,sx,sy+dy*22),fill='#e6324a',width=3)
+    sweep=(t*.24+idx*.19)%1.0
+    gx=x+int(18+sweep*(w-36))
+    d.line((gx,y+34,gx-34,y+91),fill=(191,255,255,80),width=2)
+    label='ఏఐతో రూపొందించిన దృశ్యం'
+    badge=textimg(label,16,WHITE)
+    if badge.width>w-20:
+        badge=badge.resize((w-20,max(1,round(badge.height*(w-20)/badge.width))),Image.Resampling.LANCZOS)
+    bx=x+(w-badge.width)//2;by=y+h-31
+    d.rounded_rectangle((bx-6,by-4,bx+badge.width+6,by+badge.height+4),radius=7,fill=(2,15,29,224))
+    im.alpha_composite(badge,(bx,by))
+
+def panel_base(im,heading):
+    glass(im,PANEL_BOX)
+    d=ImageDraw.Draw(im)
+    txt(im,heading,476,22,CYAN,x=PANEL_BOX[0]+22)
+    d.line((PANEL_BOX[0]+22,514,PANEL_BOX[2]-22,514),fill=(70,135,158,180),width=1)
+    d.rectangle((PANEL_BOX[0]+22,513,PANEL_BOX[0]+82,516),fill=RED)
+
+def draw_ward_tiles(im,t):
+    d=ImageDraw.Draw(im)
+    lit=min(120,int(120*max(0,min(1,t/1.65))))
+    for k in range(120):
+        row,col=divmod(k,10);x=349+col*29;y=700+row*10
+        active=k<lit
+        c=CYAN if active else '#244256'
+        d.polygon([(x,y),(x+22,y),(x+26,y-4),(x+4,y-4)],fill=c)
+        d.polygon([(x,y),(x+22,y),(x+22,y+6),(x,y+6)],fill='#267c99' if active else '#182c3c')
+
+def scene(im,idx,t):
+    # Every chapter has its own AI-generated, photo-real illustrative still.
     orbit(im,826,t)
-    if idx in (0,5):
-        # Photo-based city motion insert, explicitly labelled, not stock video.
-        y=483;w=568;h=292
-        zoom=1.03+.07*t/DURS[idx];cw=int(coast.width/zoom);ch=int(cw*h/w)
-        cx=coast.width/2+math.sin(t*.15)*8;cy=coast.height*.5
-        pic=coast.crop((int(cx-cw/2),int(cy-ch/2),int(cx+cw/2),int(cy+ch/2))).resize((w,h),Image.Resampling.LANCZOS).convert('RGBA')
-        shade=Image.new('RGBA',pic.size,(0,21,41,65));pic=Image.alpha_composite(pic,shade)
-        im.alpha_composite(pic,(76,y));d.rectangle((74,y-2,646,y+h+2),outline=CYAN,width=2)
-        d.polygon([(74,y+h+2),(646,y+h+2),(628,y+h+16),(89,y+h+16)],fill='#12344f')
-        d.rectangle((76,y+240,644,y+292),fill=(3,16,30,215));txt(im,'విశాఖ నగర ఛాయాచిత్రం',y+254,24,x=94)
-        if idx==0:
-            title(im,'120 వార్డులు',794,t,.4,True,48)
-        else:
-            d.rounded_rectangle((152,790,568,862),radius=7,fill=RED)
-            txt(im,'సబ్‌స్క్రైబ్ చేయండి',812,32)
+    photo_window(im,idx,t)
+    if idx==0:
+        panel_base(im,'ప్రధాన అప్‌డేట్')
+        local_title(im,'120',533,t,.12,True,118)
+        center_text(im,'వార్డులు',670,27,GOLD)
+        cx=PANEL_CENTER;cy=765
+        d=ImageDraw.Draw(im)
+        d.ellipse((cx-65,cy-65,cx+65,cy+65),outline='#264f68',width=2)
+        p=min(1,t/1.45)
+        d.arc((cx-65,cy-65,cx+65,cy+65),210,210+int(285*p),fill=CYAN,width=5)
+        d.arc((cx-54,cy-54,cx+54,cy+54),28,28+int(180*p),fill=RED,width=3)
+        for k in range(12):
+            a=math.radians(k*30+t*22);x=cx+76*math.cos(a);y=cy+76*math.sin(a)
+            d.ellipse((x-2,y-2,x+2,y+2),fill=CYAN if k%3 else GOLD)
+        center_text(im,'స్థానిక ఎన్నికల సన్నాహాలు',864,21,WHITE)
     elif idx==1:
-        n=min(120,int(120*min(1,t/1.5)))
-        title(im,str(n),475,t,0,True,158)
-        txt(im,'వార్డుల్లో ఎన్నికల సన్నాహాలు',656,30)
-        for k in range(120):
-            row,col=divmod(k,15);x=135+col*29+row*3;y=731+row*13
-            c=CYAN if k<n else '#1c3548'
-            d.polygon([(x,y),(x+20,y),(x+25,y-5),(x+5,y-5)],fill=c)
-            d.polygon([(x,y),(x+20,y),(x+20,y+5),(x,y+5)],fill='#267c99')
+        panel_base(im,'పరిధి వివరాలు')
+        n=min(120,int(120*max(0,min(1,t/1.65))))
+        local_title(im,str(n),530,t,0,True,106)
+        center_text(im,'మొత్తం వార్డులు',650,24,GOLD)
+        draw_ward_tiles(im,t)
+        center_text(im,'ఎన్నికల సన్నాహాలు',847,21,WHITE)
     elif idx==2:
-        slab(im,190,483+bob,332,324,18,'#e1edf3')
-        d.rectangle((208,506+bob,503,556+bob),fill='#153d58')
-        txt(im,'ఎన్నికల సన్నద్ధత',517+bob,28,x=231)
-        lines=['ఓటర్ల జాబితాలు','పోలింగ్ కేంద్రాలు','సిబ్బందికి శిక్షణ']
-        for j,s in enumerate(lines):
-            y=590+j*68+bob;p=max(0,min(1,(t-.4-j*.3)*3))
-            d.rounded_rectangle((213,y,245,y+32),radius=5,fill='#087d8d')
-            if p>0:d.line((219,y+15,227,y+24,239,y+7),fill='white',width=4)
-            txt(im,s,y+4,27,'#0c3550',x=261)
-        txt(im,'అవగాహన కార్యక్రమాలు',844,27,CYAN)
+        panel_base(im,'సిబ్బందికి శిక్షణ')
+        labels=['ఓటర్ల జాబితాలు','పోలింగ్ కేంద్రాలు','సిబ్బంది శిక్షణ']
+        d=ImageDraw.Draw(im)
+        for j,label in enumerate(labels):
+            y=544+j*103
+            p=max(0,min(1,(t-.32-j*.45)/.75))
+            d.rounded_rectangle((345,y,662,y+79),radius=10,fill=(8,29,48,222),outline='#315870',width=1)
+            c=CYAN if p>=.55 else '#356176'
+            d.rounded_rectangle((357,y+18,389,y+50),radius=7,fill=c)
+            if p>=.55:d.line((363,y+34,371,y+42,383,y+26),fill='#f3ffff',width=3)
+            txt(im,label,y+17,22,WHITE,x=400)
+            d.rounded_rectangle((357,y+61,650,y+68),radius=3,fill='#1a3447')
+            d.rounded_rectangle((357,y+61,357+int(293*p),y+68),radius=3,fill=CYAN if p>=.55 else RED)
+        center_text(im,'అవగాహన కార్యక్రమాలు',868,20,GOLD)
     elif idx==3:
-        glass(im,(80,482,640,799))
-        txt(im,'ఎన్‌డీఏ సమన్వయ సమావేశం',512,31,CYAN)
-        title(im,'మేయర్',575,t,.2,False,55)
-        title(im,'120 స్థానాలు',658,t,.5,True,59)
-        d.rectangle((111,812,609,864),fill=(122,24,41,240))
-        txt(im,'లక్ష్యాలు మాత్రమే • ఫలితాలు కావు',831,25)
+        panel_base(im,'రాజకీయ చర్చ')
+        center_text(im,'సమావేశంలో ప్రస్తావించినది',552,21,CYAN)
+        local_title(im,'ఆశయం మాత్రమే',602,t,.12,True,44)
+        center_text(im,'ఎన్నికల ఫలితం కాదు',697,23,WHITE)
+        d=ImageDraw.Draw(im)
+        d.line((PANEL_BOX[0]+37,739,PANEL_BOX[2]-37,739),fill='#34566b',width=1)
+        d.rounded_rectangle((345,769,662,818),radius=8,fill=(155,26,49,228),outline='#ff6578',width=1)
+        center_text(im,'నాయకుల ప్రకటన మాత్రమే',781,20,WHITE,300)
+        center_text(im,'తుది ఫలితాలు కావు',842,22,GOLD)
     elif idx==4:
-        slab(im,213,478+bob,286,310,18,'#dfedf3')
-        d.rectangle((214,479+bob,498,537+bob),fill=RED)
-        for x in [260,450]:d.rounded_rectangle((x,461+bob,x+12,503+bob),radius=5,fill='white')
-        for j in range(3):
-            for k in range(4):
-                x=239+k*62;y=564+j*62+bob
-                d.rectangle((x,y,x+39,y+37),fill='#b4cdd9')
-        txt(im,'షెడ్యూల్',750+bob,30,'#0c3550')
-        txt(im,'అధికారిక ప్రకటన కోసం వేచి చూడాలి',835,27,GOLD)
+        panel_base(im,'అధికారిక షెడ్యూల్')
+        d=ImageDraw.Draw(im)
+        bx,by,bw,bh=389,548,226,186
+        d.rounded_rectangle((bx,by,bx+bw,by+bh),radius=12,fill=(14,46,65,240),outline='#70e7f5',width=2)
+        d.rounded_rectangle((bx,by,bx+bw,by+45),radius=11,fill='#e6324a')
+        d.rectangle((bx,by+26,bx+bw,by+45),fill='#e6324a')
+        for x in (bx+41,bx+bw-52):
+            d.rounded_rectangle((x,by-9,x+12,by+15),radius=5,fill='#eefbff')
+        for row in range(3):
+            for col in range(4):
+                x=bx+20+col*49;y=by+65+row*34
+                pulse=(t*1.5+row*4+col)%8
+                c='#54cadf' if pulse<1.5 else '#34536a'
+                d.rounded_rectangle((x,y,x+34,y+23),radius=4,fill=c)
+        center_text(im,'నోటిఫికేషన్, తేదీలు',767,22,CYAN)
+        center_text(im,'అధికారిక ప్రకటన తర్వాతే',817,20,GOLD)
+        center_text(im,'పూర్తి వివరాలు తెలుస్తాయి',853,20,WHITE)
+    elif idx==5:
+        panel_base(im,'జనసేవతో కలిసుండండి')
+        local_title(im,'మీ మాటే ముఖ్యం',548,t,.1,False,43)
+        center_text(im,'మీ అభిప్రాయాన్ని పంచుకోండి',627,20,WHITE)
+        d=ImageDraw.Draw(im)
+        pulse=.5+.5*math.sin(t*3)
+        d.rounded_rectangle((350,695,657,772),radius=15,fill='#e92d48',outline='#ff8b9b',width=2)
+        # Animated broadcast play/ring mark, not an English-language control label.
+        cx=383;cy=733;r=13+int(3*pulse)
+        d.ellipse((cx-r,cy-r,cx+r,cy+r),outline='#fff2ee',width=2)
+        d.polygon([(cx-3,cy-7),(cx+7,cy),(cx-3,cy+7)],fill='white')
+        center_text(im,'సబ్‌స్క్రైబ్ చేయండి',716,23,WHITE,255)
+        local_title(im,'జనసేవ న్యూస్',799,t,.45,True,34)
+        center_text(im,'ప్రజల కోసం ప్రజల వార్తలు',865,20,CYAN)
 
 
 def frame(idx,t,absolute):
@@ -155,7 +255,7 @@ def frame(idx,t,absolute):
     # Red broadcast underline draws on after headline entrance.
     p=min(1,t/.8);d.polygon([(52,410),(52+int(598*p),410),(44+int(598*p),415),(52,415)],fill=RED)
     scene(im,idx,t)
-    txt(im,'వర్చువల్ స్టూడియో • సూచనాత్మక దృశ్యాలు',923,21,'#abccd9')
+    txt(im,'ఏఐతో రూపొందించిన దృశ్యాలు • సూచనాత్మక ప్రదర్శన',923,20,'#abccd9')
     # Segmented kinetic lower-third changes with narration.
     count=len(CAPS[idx]);part=min(count-1,int(t/DURS[idx]*count));local=t%(DURS[idx]/count)
     glass(im,(36,977,684,1099))

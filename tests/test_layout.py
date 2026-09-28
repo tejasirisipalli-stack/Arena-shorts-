@@ -2,11 +2,17 @@ import unittest
 import uharfbuzz as hb
 from PIL import ImageChops
 import make_video as video
+import newsroom_layout
 
 
 class LayoutTests(unittest.TestCase):
     def test_duration(self):
         self.assertEqual(sum(video.DURS), 55)
+
+    def test_six_distinct_ai_scene_visuals(self):
+        self.assertEqual(len(newsroom_layout.SCENE_IMAGES), 6)
+        self.assertEqual(len({im.tobytes() for im in newsroom_layout.SCENE_IMAGES}), 6)
+        self.assertTrue(video.textimg('ఏఐతో రూపొందించిన దృశ్యం', 16).getbbox())
 
     def test_headline_and_caption_glyphs(self):
         font = hb.Font(video.face)

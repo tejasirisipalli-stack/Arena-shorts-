@@ -1,25 +1,22 @@
 # Janaseva News — Telugu YouTube Short
 
-Deliverable: `output/vsp_gvmc_news_telugu_short.mp4` (55 seconds, 1080×1920, 24 fps, H.264/AAC, 48 kHz audio).
+Main deliverable: `output/vsp_gvmc_news_telugu_short.mp4` — 55 seconds, 1080×1920 (9:16), 24 fps, H.264/AAC, 48 kHz audio. Telugu voice and on-screen copy are preserved. The six-scene story stays on the selected narration and timing.
 
-Also included: thumbnail, six-scene layout preview, and Telugu YouTube metadata with sources and the keyword `vsp gvmc news`.
+## Visual redesign
 
-## Modern newsroom redesign
+- **Every scene now has its own photo-realistic AI-generated image**: a Visakhapatnam-inspired coastal view, a generic municipal campus, a fictional staff training workshop, an illustrative political coordination meeting with invented people, official-looking but blank desk paperwork, and a dusk coastal-city view.
+- Each image is shown in a portrait media window, individually labelled in Telugu as AI-generated, and receives subtle animated camera pan/zoom plus studio light accents.
+- Cyan/red virtual newsroom, kinetic extruded metallic Telugu headlines, holographic panels and ward tiles, animated checklists/calendar, transitions and an interactive-looking end-card CTA.
+- Political meeting and civic scenes are **illustrations, not actual event footage**. People and buildings are generic, no real official or public figure is depicted, and the paperwork is not a real government notice. Election claims remain attributed and the notification/schedule caveat stays prominent.
 
-- AI-generated virtual broadcast studio with cyan/red lighting, reflective stage, and animated camera push.
-- Extruded, beveled metallic Telugu headlines with staggered kinetic entrances.
-- Animated holographic rings, perspective floor, light particles, and diagonal transition wipes.
-- Three-dimensional ward tiles with a count-up, floating document/calendar panels, and animated lower thirds.
-- Photo-based city motion inserts, explicitly labelled as a city photograph. These are not filmed live-action video.
+The realistic images are generated stills—not recorded video. Camera movement and transitions animate the presentation without implying that the pictured events actually occurred. A photo of the city is not evidence of a specific GVMC activity. The image label and upload description disclose the AI illustrations.
 
-The supplied six passages retain the selected synthetic female Telugu voice. Scene timing remains 9 / 8 / 7 / 11 / 8 / 12 seconds. Graphics are illustrative, not footage of an actual GVMC office or political meeting. Text uses HarfBuzz shaping for Telugu conjuncts. Political goals remain labelled as claims rather than outcomes.
+See `output/youtube_metadata_te.md` for the Telugu title, description, exact keyword `vsp gvmc news`, source links and upload notes. `output/thumbnail.jpg` is the revised video thumbnail; `output/realistic-layout-review.jpg` is a six-scene design preview.
 
-## Rebuild
+## Rebuild and test
 
 Install Python packages `pillow imageio-ffmpeg uharfbuzz freetype-py`; DejaVu Sans Bold must be available in `/usr/share/fonts/truetype/dejavu/`.
 
-Run `python make_video.py` from this directory. `newsroom_layout.py` provides the compositor; `make_video.py` shapes text, retimes narration, and encodes the video. Selected narration, merged Telugu/Latin Noto font and its license, city photograph, and generated studio background are included. Intermediate retimed audio is ignored by Git.
+Run `python make_video.py` from the repository root. `newsroom_layout.py` provides the compositor. `assets/realistic/scene1.jpg` through `scene6.jpg` are the generated visual assets; narration WAVs, the merged Telugu/Latin Noto font and its license are also included. Intermediate retimed audio is ignored by Git.
 
-Run `python -m unittest discover -s tests` for frame/text smoke tests. The final export was also fully decoded with FFmpeg to check for audio/video errors.
-
-Review current election announcements and the photo source/licensing before publishing. See `output/youtube_metadata_te.md` for source links and editorial notes.
+Run `python -m unittest discover -s tests` for frame and text-shaping smoke tests. The completed MP4 can be fully decoded with FFmpeg to validate the export.
