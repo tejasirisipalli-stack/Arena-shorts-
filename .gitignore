@@ -1,4 +1,11 @@
 __pycache__/
+*.pyc
+
+# Intermediate render artefacts (regenerate with make_music.py / make_video.py)
+build/
+*.geojson
+
+# Legacy pipeline intermediates
 assets/retimed*.wav
 assets/audio.txt
 assets/narration.wav

@@ -1,74 +1,240 @@
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
-import uharfbuzz as hb, freetype, math, subprocess, wave, functools, os
+"""Renders the JANASEVA NEWS 60-second Telugu housing Short.
+
+Pipeline
+  1. Compress each narration clip by TL.TEMPO and pad/trim it into its scene slot,
+     asserting the measured durations still match news_timeline.VO_SECONDS.
+  2. Read the retimed narration back, detect the real pauses inside each scene, and
+     snap the subtitle cues onto them, so captions follow the voice instead of an
+     estimate.
+  3. Normalise the voice, then mix the music bed and SFX under it with sidechain
+     ducking.
+  4. Render 1800 frames at 1080x1920 and encode H.264/AAC, 30 fps, 60.000 s.
+
+Usage:  python3 make_video.py            # full render
+        python3 make_video.py --sheet     # contact sheet only, no encode
+"""
+import math, os, subprocess, sys, wave
+
+import numpy as np
+
 import imageio_ffmpeg
-W,H,FPS=720,1280,24
-FF=imageio_ffmpeg.get_ffmpeg_exe()
-FONT='assets/Merged.ttf'
-fontdata=open(FONT,'rb').read(); face=hb.Face(fontdata)
-YELLOW='#ffe15b'; WHITE='#f7f9fc'; MUTED='#b6c8d8'; RED='#e53245'
-@functools.lru_cache(maxsize=400)
-def textimg(text,size,color=WHITE):
-    font=hb.Font(face);font.scale=(size*64,size*64);hb.ot_font_set_funcs(font)
-    buf=hb.Buffer();buf.add_str(text);buf.guess_segment_properties();hb.shape(font,buf)
-    ft=freetype.Face(FONT);ft.set_pixel_sizes(0,size)
-    width=int(sum(p.x_advance for p in buf.glyph_positions)/64)+16
-    im=Image.new('RGBA',(max(width,1),size*3)); x=5; baseline=size*1.6
-    for info,p in zip(buf.glyph_infos,buf.glyph_positions):
-        ft.load_glyph(info.codepoint,freetype.FT_LOAD_RENDER);g=ft.glyph;b=g.bitmap
-        if b.width and b.rows:
-            mask=Image.frombytes('L',(b.width,b.rows),bytes(b.buffer))
-            tile=Image.new('RGBA',mask.size,color);tile.putalpha(mask)
-            im.alpha_composite(tile,(int(x+p.x_offset/64+g.bitmap_left),int(baseline-p.y_offset/64-g.bitmap_top)))
-        x+=p.x_advance/64
-    box=im.getbbox();return im.crop(box) if box else im
+from PIL import Image
 
-def txt(im,s,y,size=42,color=WHITE,x=None):
-    t=textimg(s,size,color)
-    if t.width>636: t=t.resize((636,round(t.height*636/t.width)),Image.Resampling.LANCZOS)
-    im.alpha_composite(t,(int((W-t.width)/2 if x is None else x),int(y)))
+import janaseva_short as J
+import news_timeline as TL
 
-def num(im,s,xy,size=80,color=YELLOW):
-    d=ImageDraw.Draw(im);f=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',size)
-    d.text(xy,s,font=f,fill=color,anchor='mm')
+FF = imageio_ffmpeg.get_ffmpeg_exe()
+W, H, FPS = J.W, J.H, J.FPS
+SR = 48000
+VIDEO = 'output/ap_3lakh_houses_telugu_short.mp4'
 
-DURS=[9,8,7,11,8,12]
-HEADS=[['జీవీఎంసీ ఎన్నికలకు','సన్నాహాలు!'],['మొత్తం 120','వార్డులతో ఏర్పాట్లు'],['ఎన్నికల ఏర్పాట్లు','కొనసాగుతున్నాయి'],['మేయర్ పదవి','120 స్థానాలే లక్ష్యం'],['అధికారిక ప్రకటన','వచ్చాకే స్పష్టత'],['మీ అభిప్రాయం','కామెంట్ చేయండి']]
-CAPS=[
-['విశాఖపట్నం ఎన్నికల అప్‌డేట్','120 వార్డులతో సన్నాహాలు','నివేదికలు చెబుతున్న సమాచారం'],
-['గ్రేటర్ విశాఖ మున్సిపల్ కార్పొరేషన్','120 వార్డుల్లో ఎన్నికల ఏర్పాట్లు','తాజా నివేదికల ప్రకారం'],
-['ఎన్నికల విధులపై అవగాహన','అధికారులు, సిబ్బందికి శిక్షణ','నివేదికల్లో వెల్లడైన వివరాలు'],
-['ఎన్‌డీఏ సమన్వయ సమావేశం','జీవీఎంసీ ఎన్నికలపై చర్చ','మేయర్, కార్పొరేటర్ స్థానాల లక్ష్యం','ఇవి నాయకుల ప్రకటనలు మాత్రమే'],
-['ఎన్నికల నోటిఫికేషన్, షెడ్యూల్','అధికారిక ప్రకటన కోసం వేచి చూడాలి','ఆ తర్వాతే పూర్తి వివరాలు'],
-['మరిన్ని వివరాలకు డిస్క్రిప్షన్ చూడండి','మీ అభిప్రాయాన్ని పంచుకోండి','తాజా వార్తలకు సబ్‌స్క్రైబ్ చేయండి','ప్రజల కోసం ప్రజల వార్తలు']]
-LABEL=['తాజా సమాచారం','నివేదికల ప్రకారం','సిబ్బందికి శిక్షణ','నాయకుల ప్రకటన','ముఖ్య గమనిక','జనసేవ న్యూస్']
-# Use the modern animated virtual-studio compositor.
-import newsroom_layout
-newsroom_layout.install(globals())
-frame = newsroom_layout.frame
 
-def render():
-    os.makedirs('output',exist_ok=True)
-    # Retiming each passage modestly preserves clarity and the 55-second total.
-    for i,dur in enumerate(DURS):
-        with wave.open(f'assets/scene{i+1}.wav') as w: sec=w.getnframes()/w.getframerate()
-        ratio=sec/(dur-.15)
-        subprocess.run([FF,'-y','-loglevel','error','-i',f'assets/scene{i+1}.wav','-af',f'atempo={ratio},apad,atrim=duration={dur},afade=t=in:d=0.025,afade=t=out:st={dur-.08}:d=0.08','-ar','48000','-ac','1',f'assets/retimed{i}.wav'],check=True)
-    with open('assets/audio.txt','w') as f:
-        for i in range(6):f.write(f"file 'retimed{i}.wav'\n")
-    subprocess.run([FF,'-y','-loglevel','error','-f','concat','-safe','0','-i','assets/audio.txt','-af','loudnorm=I=-16:TP=-1.5:LRA=9','assets/narration.wav'],check=True)
-    cmd=[FF,'-y','-loglevel','error','-f','rawvideo','-vcodec','rawvideo','-pix_fmt','rgb24','-s',f'{W}x{H}','-r',str(FPS),'-i','-','-i','assets/narration.wav','-vf','scale=1080:1920:flags=lanczos','-c:v','libx264','-preset','fast','-crf','20','-pix_fmt','yuv420p','-c:a','aac','-ar','48000','-metadata:s:a:0','language=tel','-b:a','192k','-movflags','+faststart','-t','55','output/vsp_gvmc_news_telugu_short.mp4']
-    p=subprocess.Popen(cmd,stdin=subprocess.PIPE)
-    absolute=0
-    for idx,dur in enumerate(DURS):
-        print('Rendering scene',idx+1,flush=True)
-        for k in range(dur*FPS):
-            im=frame(idx,k/FPS,absolute+k/FPS)
-            if idx==0 and k==30: im.resize((1080,1920)).save('output/thumbnail.jpg',quality=95)
-            p.stdin.write(im.tobytes())
-        absolute+=dur
-    p.stdin.close()
-    if p.wait():raise RuntimeError('Encoding failed')
-    print('Finished: output/vsp_gvmc_news_telugu_short.mp4')
+def run(args, **kw):
+    return subprocess.run(args, check=True, capture_output=True, **kw)
+
+
+def wav_read(path):
+    with wave.open(path) as f:
+        assert f.getsampwidth() == 2, path
+        n = f.getnframes()
+        data = np.frombuffer(f.readframes(n), dtype='<i2').astype(np.float32) / 32768.0
+        if f.getnchannels() == 2:
+            data = data.reshape(-1, 2).mean(axis=1)
+        return data, f.getframerate()
+
+
+def wav_write(path, data, sr=SR):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    pcm = (np.clip(data, -1, 1) * 32767).astype('<i2')
+    with wave.open(path, 'wb') as f:
+        f.setnchannels(1)
+        f.setsampwidth(2)
+        f.setframerate(sr)
+        f.writeframes(pcm.tobytes())
+
+
+# --- step 1: per-scene narration -------------------------------------------
+def build_voice():
+    """Compress each narration clip into its scene slot and pad to the frame.
+
+    Returns the measured *source* duration of every clip so the caller can check
+    news_timeline still describes the files on disk.
+    """
+    os.makedirs('build', exist_ok=True)
+    sources = []
+    for i, (vid, frames) in enumerate(zip(TL.VO_IDS, TL.SCHEDULE)):
+        src = f'assets/{vid}.mp3'
+        dry = f'build/src{i}.wav'
+        run([FF, '-y', '-loglevel', 'error', '-i', src, '-ar', str(SR), '-ac', '1', dry])
+        raw, _ = wav_read(dry)
+        sources.append(len(raw) / SR)
+        slot = frames / FPS
+        speech = sources[-1] / TL.TEMPO
+        if speech > slot - 0.025:
+            raise SystemExit(f'{vid}: {speech:.3f}s of speech does not fit the '
+                             f'{slot:.3f}s slot (raise TL.TEMPO)')
+        # Compress to the plan, then pad with silence so the scene starts on its
+        # own frame boundary and the last word is never clipped.
+        run([FF, '-y', '-loglevel', 'error', '-i', dry, '-af',
+             # Only a short fade-in: the clips already end on silence, and with
+             # this little slack a fade-out would clip the final word.
+             f'atempo={TL.TEMPO},apad,atrim=duration={slot},afade=t=in:d=0.02',
+             '-ar', str(SR), '-ac', '1', f'build/retimed{i}.wav'])
+    return sources
+
+
+def snap_cues(voice, sr=SR):
+    """Subtitle timing driven by the pauses actually present in the narration.
+
+    Each cue gets a proportional slot; the slot boundaries are then nudged onto
+    the nearest quiet sample inside a small search window, so a caption changes on
+    a breath rather than halfway through a word.
+    """
+    total = voice.shape[0]
+    win = int(0.02 * sr)
+    n = total // win
+    frames = voice[:n * win].reshape(n, win)
+    rms = np.sqrt((frames ** 2).mean(axis=1) + 1e-12)
+    quiet = rms < max(0.012, float(np.percentile(rms, 25)) * 0.45)
+
+    # Candidate boundaries: the middle of every quiet stretch.
+    bnd = []
+    k = 0
+    while k < n:
+        if quiet[k]:
+            j = k
+            while j < n and quiet[j]:
+                j += 1
+            bnd.append(((k + j) / 2) * win / sr)      # seconds, not samples
+            k = j
+        else:
+            k += 1
+
+    out, start = [], 0
+    for i, cues in enumerate(TL.SUBS):
+        scene_frames = TL.SCHEDULE[i]
+        t0, t1 = start / FPS, (start + scene_frames) / FPS
+        weights = [c[1] for c in cues]
+        tot = sum(weights)
+        edges = []
+        acc = 0.0
+        for w in weights[:-1]:
+            acc += w
+            target = t0 + (t1 - t0) * acc / tot
+            near = [b for b in bnd if abs(b - target) < 0.55 and t0 + .25 < b < t1 - .25]
+            edges.append(min(near, key=lambda b: abs(b - target)) if near else target)
+        bounds = [t0] + edges + [t1]
+        rows = []
+        for (text, _w, hi), a, b in zip(cues, bounds[:-1], bounds[1:]):
+            rows.append((text, round(a, 3), round(b, 3), hi))
+        out.append(rows)
+        start += scene_frames
+    return out
+
+
+# --- step 3: audio mix ------------------------------------------------------
+def mix_audio(cues):
+    subprocess.run([FF, '-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i',
+                    'build/voice_list.txt', '-af',
+                    'loudnorm=I=-15:TP=-1.5:LRA=9', '-ar', str(SR), '-ac', '1',
+                    'build/voice_norm.wav'], check=True)
+    voice, _ = wav_read('build/voice_norm.wav')
+    need = int(round(TL.TOTAL_FRAMES / FPS * SR))
+    voice = np.pad(voice, (0, max(0, need - voice.shape[0])))[:need]
+
+    music, _ = wav_read('build/music.wav')
+    sfx, _ = wav_read('build/sfx.wav')
+    music = np.pad(music, (0, max(0, need - music.shape[0])))[:need]
+    sfx = np.pad(sfx, (0, max(0, need - sfx.shape[0])))[:need]
+
+    # Ducking envelope: follow the voice with a fast attack and a slow release.
+    win = 480                                     # 10 ms
+    n = need // win
+    env = np.sqrt((voice[:n * win].reshape(n, win) ** 2).mean(axis=1) + 1e-12)
+    env = np.convolve(env, np.ones(9) / 9, mode='same')
+    env = np.interp(np.arange(need), np.arange(n) * win, env)
+    duck = 1.0 - 0.62 * np.clip(env / 0.05, 0, 1) ** 0.6
+    duck = np.convolve(duck, np.ones(2048) / 2048, mode='same')
+    duck = np.clip(duck, 0.30, 1.0)
+
+    mixed = voice * 1.0 + music * 0.34 * duck + sfx * 0.30 * duck
+    peak = float(np.max(np.abs(mixed))) or 1.0
+    mixed = mixed / peak * 0.92
+    wav_write('build/mix.wav', mixed)
+    return mixed
+
+
+def voice_lists():
+    with open('build/voice_list.txt', 'w') as f:
+        for i in range(len(TL.SCHEDULE)):
+            f.write(f"file 'retimed{i}.wav'\n")
+
+
+def cue_at(rows, absolute):
+    for text, a, b, hi in rows:
+        if a <= absolute < b:
+            return (text, hi)
+    return None
+
+
+# --- step 4: render ---------------------------------------------------------
+def render(cues):
+    os.makedirs('output', exist_ok=True)
+    cmd = [FF, '-y', '-loglevel', 'error',
+           '-f', 'rawvideo', '-vcodec', 'rawvideo', '-pix_fmt', 'rgb24',
+           '-s', f'{W}x{H}', '-r', str(FPS), '-i', '-',
+           '-i', 'build/mix.wav',
+           '-c:v', 'libx264', '-preset', 'medium', '-crf', '19', '-pix_fmt', 'yuv420p',
+           '-profile:v', 'high', '-level', '4.1',
+           '-c:a', 'aac', '-ar', '48000', '-b:a', '192k',
+           '-metadata:s:a:0', 'language=tel',
+           '-movflags', '+faststart', '-t', f'{TL.TOTAL_FRAMES / FPS:.3f}', VIDEO]
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE)
+    absolute = 0.0
+    for idx, frames in enumerate(TL.SCHEDULE):
+        for k in range(frames):
+            t = k / FPS
+            cue = cue_at(cues[idx], absolute)
+            im = J.frame(idx, t, absolute, active_cue=cue)
+            proc.stdin.write(im.tobytes())
+            if idx == 0 and k == 45:
+                im.save('output/thumbnail.jpg', quality=94)
+            absolute += 1 / FPS
+        print(f'  scene {idx + 1}/{len(TL.SCHEDULE)} done ({absolute:.2f} s)', flush=True)
+    proc.stdin.close()
+    if proc.wait():
+        raise RuntimeError('ffmpeg encode failed')
+    print('wrote', VIDEO)
+
+
+def main():
+    if '--sheet' in sys.argv:
+        for i, sc in enumerate(TL.SCENES):
+            J.frame(i, (TL.SCHEDULE[i] / FPS) * .6, TL.scene_start(i) + 1.0,
+                    active_cue=None).save(f'/tmp/scene{i + 1}.png')
+        print('sheet written to /tmp')
+        return
+
+    print('1/4 compressing narration ...')
+    measured = build_voice()
+    for vid, got, want in zip(TL.VO_IDS, measured, TL.VO_SECONDS):
+        if abs(got - want) > 0.35:
+            raise SystemExit(f'{vid}: narration file is {got:.2f}s, '
+                             f'news_timeline says {want:.2f}s')
+        print(f'   {vid}: {got:.2f}s source -> {got / TL.TEMPO:.2f}s in slot')
+    voice_lists()
+    print('2/4 snapping subtitle cues to narration pauses ...')
+    raw = np.concatenate([wav_read(f'build/retimed{i}.wav')[0]
+                          for i in range(len(TL.SCHEDULE))])
+    cues = snap_cues(raw)
+    for i, rows in enumerate(cues):
+        print(f'   scene {i + 1}: ' +
+              ' | '.join(f'{a:.2f}-{b:.2f} {t[:18]}' for t, a, b, _ in rows))
+    print('3/4 mixing voice, music and SFX ...')
+    mix_audio(cues)
+    print('4/4 rendering frames ...')
+    render(cues)
+
 
 if __name__ == '__main__':
-    render()
+    main()
