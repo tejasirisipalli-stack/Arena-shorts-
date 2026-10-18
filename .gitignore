@@ -2,3 +2,7 @@ __pycache__/
 assets/retimed*.wav
 assets/audio.txt
 assets/narration.wav
+assets/audio/narration_raw.wav
+assets/audio/narration_venus.wav
+output/preview_*.jpg
+output/check_*.jpg
